@@ -1,0 +1,17 @@
+{
+  "name": "library-school-management",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A role-based online library management app for students and library managers.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "migrate:sqlite": "node scripts/migrate-sqlite-to-mysql.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "express": "^5.1.0",
+    "mysql2": "^3.24.6"
+  }
+}
