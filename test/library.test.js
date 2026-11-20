@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
@@ -44,7 +46,7 @@ if (!testDatabasePrefix) {
     const connectionOptions = {
       host: process.env.MYSQL_HOST || "127.0.0.1",
       port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER || "library_app",
+      user: process.env.MYSQL_USER || "libraryUser",
       password: process.env.MYSQL_PASSWORD || "",
       ...(process.env.MYSQL_SSL_CA
         ? { ssl: { ca: require("node:fs").readFileSync(process.env.MYSQL_SSL_CA, "utf8") } }
@@ -95,9 +97,14 @@ if (!testDatabasePrefix) {
       server.kill();
       await once(server, "exit");
     }
-    if (adminConnection && databaseName) {
-      await adminConnection.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
-      await adminConnection.end();
+    if (adminConnection) {
+      try {
+        if (databaseName) {
+          await adminConnection.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
+        }
+      } finally {
+        await adminConnection.end();
+      }
     }
   });
 
