@@ -169,6 +169,22 @@ async function createSession(userId, res) {
   setSessionCookie(res, id);
 }
 
+async function createPickupCode(loanId, connection) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+    try {
+      await execute("INSERT INTO pickup_codes (loan_id, code) VALUES (?, ?)", [loanId, code], connection);
+      return code;
+    } catch (error) {
+      if (error.code !== "ER_DUP_ENTRY") throw error;
+      const existing = await queryOne("SELECT code FROM pickup_codes WHERE loan_id = ?", [loanId], connection);
+      if (existing) return existing.code;
+      if (attempt === 9) throw error;
+    }
+  }
+  throw new Error("Could not assign a pickup code.");
+}
+
 app.disable("x-powered-by");
 app.use(express.json({ limit: "20kb" }));
 app.use((req, res, next) => {
@@ -247,30 +263,45 @@ app.get("/api/books", async (req, res) => {
     values.push(category);
   }
   const books = await queryAll(`
-    SELECT * FROM books
-    ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+    SELECT books.* FROM books
+    WHERE NOT EXISTS (SELECT 1 FROM archived_books WHERE archived_books.book_id = books.id)
+    ${filters.length ? `AND ${filters.join(" AND ")}` : ""}
     ORDER BY title
   `, values);
   res.json({
     books: await Promise.all(books.map(publicBook)),
-    categories: (await queryAll("SELECT DISTINCT category FROM books ORDER BY category")).map((row) => row.category)
+    categories: (await queryAll(`
+      SELECT DISTINCT books.category FROM books
+      WHERE NOT EXISTS (SELECT 1 FROM archived_books WHERE archived_books.book_id = books.id)
+      ORDER BY books.category
+    `)).map((row) => row.category)
   });
 });
 
 app.get("/api/loans", requireAuth, async (req, res) => {
   const filter = req.user.role === "manager" ? "" : "WHERE loans.student_id = ?";
   const values = req.user.role === "manager" ? [] : [req.user.id];
+  const loansWithoutCodes = await queryAll(`
+    SELECT loans.id FROM loans
+    LEFT JOIN pickup_codes ON pickup_codes.loan_id = loans.id
+    ${filter ? `${filter} AND` : "WHERE"} pickup_codes.loan_id IS NULL
+  `, values);
+  for (const loan of loansWithoutCodes) {
+    await createPickupCode(loan.id, pool);
+  }
   const loans = await queryAll(`
-    SELECT loans.*, books.title, books.author, users.name AS student_name, users.email AS student_email
+    SELECT loans.*, pickup_codes.code AS pickup_code, books.title, books.author,
+      users.name AS student_name, users.email AS student_email
     FROM loans JOIN books ON books.id = loans.book_id
     JOIN users ON users.id = loans.student_id
+    LEFT JOIN pickup_codes ON pickup_codes.loan_id = loans.id
     ${filter}
     ORDER BY loans.requested_at DESC, loans.id DESC
   `, values);
   res.json({ loans: loans.map((loan) => ({
     id: loan.id, studentId: loan.student_id, studentName: loan.student_name, studentEmail: loan.student_email,
     bookId: loan.book_id, title: loan.title, author: loan.author, status: loan.status,
-    requestedAt: loan.requested_at, dueAt: loan.due_at, returnedAt: loan.returned_at
+    pickupCode: loan.pickup_code, requestedAt: loan.requested_at, dueAt: loan.due_at, returnedAt: loan.returned_at
   })) });
 });
 
@@ -278,7 +309,12 @@ app.post("/api/loans", requireAuth, requireRole("student"), async (req, res) => 
   const bookId = Number(req.body?.bookId);
   if (!Number.isSafeInteger(bookId) || bookId < 1) return res.status(400).json({ error: "Choose a valid book." });
   const result = await withTransaction(async (connection) => {
-    const book = await queryOne("SELECT id FROM books WHERE id = ? FOR UPDATE", [bookId], connection);
+    const book = await queryOne(`
+      SELECT books.id FROM books
+      WHERE books.id = ? AND NOT EXISTS (
+        SELECT 1 FROM archived_books WHERE archived_books.book_id = books.id
+      ) FOR UPDATE
+    `, [bookId], connection);
     if (!book) return { error: "That book could not be found.", status: 404 };
     const available = await availableCopies(bookId, connection);
     if (available < 1) return { error: "This book is currently unavailable.", status: 409 };
@@ -292,10 +328,15 @@ app.post("/api/loans", requireAuth, requireRole("student"), async (req, res) => 
       [req.user.id, bookId],
       connection
     );
-    return { id: loan.insertId };
+    const pickupCode = await createPickupCode(loan.insertId, connection);
+    return { id: loan.insertId, pickupCode };
   });
   if (result.error) return res.status(result.status).json({ error: result.error });
-  res.status(201).json({ loanId: result.id, message: "Your request is with the library manager." });
+  res.status(201).json({
+    loanId: result.id,
+    pickupCode: result.pickupCode,
+    message: "Your request is with the library manager. Keep your pickup code for collection."
+  });
 });
 
 app.post("/api/loans/:id/return", requireAuth, requireRole("student"), async (req, res) => {
@@ -311,12 +352,41 @@ app.post("/api/loans/:id/return", requireAuth, requireRole("student"), async (re
 
 app.get("/api/manager/summary", requireAuth, requireRole("manager"), async (req, res) => {
   const [books, students, pending, active] = await Promise.all([
-    queryOne("SELECT COUNT(*) AS count, COALESCE(SUM(total_copies), 0) AS copies FROM books"),
+    queryOne(`
+      SELECT COUNT(*) AS count, COALESCE(SUM(books.total_copies), 0) AS copies FROM books
+      WHERE NOT EXISTS (SELECT 1 FROM archived_books WHERE archived_books.book_id = books.id)
+    `),
     queryOne("SELECT COUNT(*) AS count FROM users WHERE `role` = 'student'"),
     queryOne("SELECT COUNT(*) AS count FROM loans WHERE status = 'pending'"),
     queryOne("SELECT COUNT(*) AS count FROM loans WHERE status IN ('approved', 'return_requested')")
   ]);
   res.json({ books: books.count, copies: books.copies, students: students.count, pending: pending.count, active: active.count });
+});
+
+app.post("/api/manager/pickup-check", requireAuth, requireRole("manager"), async (req, res) => {
+  const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+  if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "Enter a valid six-digit pickup code." });
+  const loan = await queryOne(`
+    SELECT loans.id, loans.status, loans.due_at, pickup_codes.code AS pickup_code,
+      books.title, books.author, users.name AS student_name, users.email AS student_email
+    FROM pickup_codes
+    JOIN loans ON loans.id = pickup_codes.loan_id
+    JOIN books ON books.id = loans.book_id
+    JOIN users ON users.id = loans.student_id
+    WHERE pickup_codes.code = ?
+  `, [code]);
+  if (!loan) return res.status(404).json({ error: "No request was found for that pickup code." });
+  res.json({
+    loanId: loan.id,
+    code: loan.pickup_code,
+    status: loan.status,
+    dueAt: loan.due_at,
+    title: loan.title,
+    author: loan.author,
+    studentName: loan.student_name,
+    studentEmail: loan.student_email,
+    canCollect: loan.status === "approved"
+  });
 });
 
 app.post("/api/manager/books", requireAuth, requireRole("manager"), async (req, res) => {
@@ -343,7 +413,12 @@ app.patch("/api/manager/books/:id", requireAuth, requireRole("manager"), async (
     return res.status(400).json({ error: "Check the book details and copy count, then try again." });
   }
   const result = await withTransaction(async (connection) => {
-    const book = await queryOne("SELECT id FROM books WHERE id = ? FOR UPDATE", [bookId], connection);
+    const book = await queryOne(`
+      SELECT books.id FROM books
+      WHERE books.id = ? AND NOT EXISTS (
+        SELECT 1 FROM archived_books WHERE archived_books.book_id = books.id
+      ) FOR UPDATE
+    `, [bookId], connection);
     if (!book) return { missing: true };
     const active = await queryOne(
       "SELECT COUNT(*) AS count FROM loans WHERE book_id = ? AND status IN ('approved', 'return_requested')",
@@ -366,15 +441,29 @@ app.delete("/api/manager/books/:id", requireAuth, requireRole("manager"), async 
   const bookId = Number(req.params.id);
   if (!Number.isSafeInteger(bookId) || bookId < 1) return res.status(400).json({ error: "Choose a valid book." });
   const result = await withTransaction(async (connection) => {
-    const book = await queryOne("SELECT id FROM books WHERE id = ? FOR UPDATE", [bookId], connection);
+    const book = await queryOne(`
+      SELECT books.id FROM books
+      WHERE books.id = ? AND NOT EXISTS (
+        SELECT 1 FROM archived_books WHERE archived_books.book_id = books.id
+      ) FOR UPDATE
+    `, [bookId], connection);
     if (!book) return { missing: true };
+    const active = await queryOne(
+      "SELECT COUNT(*) AS count FROM loans WHERE book_id = ? AND status IN ('pending', 'approved', 'return_requested')",
+      [bookId],
+      connection
+    );
+    if (Number(active.count)) return { conflict: true };
     const history = await queryOne("SELECT COUNT(*) AS count FROM loans WHERE book_id = ?", [bookId], connection);
-    if (Number(history.count)) return { conflict: true };
+    if (Number(history.count)) {
+      await execute("INSERT INTO archived_books (book_id) VALUES (?)", [bookId], connection);
+      return { ok: true, archived: true };
+    }
     await execute("DELETE FROM books WHERE id = ?", [bookId], connection);
     return { ok: true };
   });
   if (result.missing) return res.status(404).json({ error: "That book could not be found." });
-  if (result.conflict) return res.status(409).json({ error: "Books with borrowing history cannot be removed." });
+  if (result.conflict) return res.status(409).json({ error: "Resolve pending requests and active loans before removing this book." });
   res.json({ ok: true });
 });
 

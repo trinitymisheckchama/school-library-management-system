@@ -71,6 +71,21 @@ async function initializeDatabase({ seed = true } = {}) {
       CONSTRAINT loans_book_fk FOREIGN KEY (book_id) REFERENCES books(id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pickup_codes (
+      loan_id INT UNSIGNED NOT NULL PRIMARY KEY,
+      code CHAR(6) NOT NULL UNIQUE,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT pickup_codes_loan_fk FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS archived_books (
+      book_id INT UNSIGNED NOT NULL PRIMARY KEY,
+      archived_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT archived_books_book_fk FOREIGN KEY (book_id) REFERENCES books(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 
   if (!seed) return;
   const books = [

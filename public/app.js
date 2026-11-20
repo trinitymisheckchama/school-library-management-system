@@ -11,6 +11,7 @@ const state = {
   loans: [],
   summary: null,
   managerTab: "requests",
+  pickupCheck: null,
   authMode: "login",
   toastTimer: null
 };
@@ -168,6 +169,7 @@ function loanRows(loans, manager = false) {
     return `<tr>
       ${manager ? `<td><div class="table-book">${escapeHtml(loan.studentName)}</div><div class="table-sub">${escapeHtml(loan.studentEmail)}</div></td>` : ""}
       <td><div class="table-book">${escapeHtml(loan.title)}</div><div class="table-sub">${escapeHtml(loan.author)}</div></td>
+      ${manager ? "" : `<td><span class="pickup-code">${escapeHtml(loan.pickupCode || "—")}</span></td>`}
       <td>${statusBadge(loan.status)}</td><td>${formatDate(loan.requestedAt)}</td>
       <td>${formatDate(loan.dueAt)}</td><td>${actions}</td>
     </tr>`;
@@ -178,7 +180,7 @@ function myLoansPage() {
   return `<div class="eyebrow">Your books</div><h1>My reading shelf</h1>
     <p class="page-subtitle">Keep track of requests, books to enjoy, and returns — all in one place.</p>
     <div class="table-wrap">
-      ${state.loans.length ? `<table class="data-table"><thead><tr><th>Book</th><th>Status</th><th>Requested</th><th>Due date</th><th>Action</th></tr></thead><tbody>${loanRows(state.loans)}</tbody></table>` :
+      ${state.loans.length ? `<table class="data-table"><thead><tr><th>Book</th><th>Pickup code</th><th>Status</th><th>Requested</th><th>Due date</th><th>Action</th></tr></thead><tbody>${loanRows(state.loans)}</tbody></table>` :
         `<div class="empty-state"><div class="empty-icon">▤</div>Your shelf is still empty.<br>Find a book you love and send a borrow request.</div>`}
     </div>
     <button class="button button-secondary" style="margin-top:17px" data-page="catalog">Browse the collection</button>`;
@@ -191,8 +193,15 @@ function managerDashboard() {
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Book</th><th>Subject</th><th>Available</th><th>Total copies</th><th>Action</th></tr></thead><tbody>
       ${state.books.map((book) => `<tr><td><div class="table-book">${escapeHtml(book.title)}</div><div class="table-sub">${escapeHtml(book.author)}</div></td><td>${escapeHtml(book.category)}</td><td>${book.availableCopies}</td><td>${book.totalCopies}</td><td><div class="table-actions"><button class="button button-secondary button-small" data-action="edit-book" data-id="${book.id}">Edit</button><button class="button button-danger button-small" data-action="delete-book" data-id="${book.id}">Remove</button></div></td></tr>`).join("")}
     </tbody></table></div>` :
-    `<div class="section-heading"><div><h2>Borrow requests &amp; loans</h2><p>Review student requests and check books back in.</p></div></div>
-    <div class="table-wrap">${state.loans.length ? `<table class="data-table"><thead><tr><th>Student</th><th>Book</th><th>Status</th><th>Requested</th><th>Due date</th><th>Action</th></tr></thead><tbody>${loanRows(state.loans, true)}</tbody></table>` : `<div class="empty-state">No borrow requests yet. They will appear here when a student asks for a book.</div>`}</div>`;
+    state.managerTab === "pickup" ?
+      `<div class="section-heading"><div><h2>Verify a pickup</h2><p>Check the student and request before handing over a book.</p></div></div>
+      <form id="pickup-check-form" class="pickup-check-form">
+        <label class="form-field" for="pickup-code-input">Six-digit pickup code<input class="field" id="pickup-code-input" name="code" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"></label>
+        <button class="button" type="submit">Check code</button>
+      </form>
+      ${state.pickupCheck ? `<section class="pickup-result" aria-live="polite"><div class="eyebrow">Pickup code ${escapeHtml(state.pickupCheck.code)}</div><h2>${escapeHtml(state.pickupCheck.title)}</h2><p>Student: <strong>${escapeHtml(state.pickupCheck.studentName)}</strong> (${escapeHtml(state.pickupCheck.studentEmail)})</p><p>Status: ${statusBadge(state.pickupCheck.status)}</p><p class="pickup-verdict ${state.pickupCheck.canCollect ? "ready" : "waiting"}">${state.pickupCheck.canCollect ? "Approved. You may hand over this book." : "This request is not approved for collection yet."}</p></section>` : ""}` :
+      `<div class="section-heading"><div><h2>Borrow requests &amp; loans</h2><p>Review student requests and check books back in.</p></div></div>
+      <div class="table-wrap">${state.loans.length ? `<table class="data-table"><thead><tr><th>Student</th><th>Book</th><th>Status</th><th>Requested</th><th>Due date</th><th>Action</th></tr></thead><tbody>${loanRows(state.loans, true)}</tbody></table>` : `<div class="empty-state">No borrow requests yet. They will appear here when a student asks for a book.</div>`}</div>`;
   return `<div class="eyebrow">Staff workspace</div><h1>Library overview</h1><p class="page-subtitle">A quick look at your collection and what needs your attention.</p>
     <div class="stats-grid">
       <div class="stat-card"><span class="stat-icon">${icons.catalog}</span><span><span class="stat-label">Book titles</span><div class="stat-value">${summary.books}</div></span></div>
@@ -203,6 +212,7 @@ function managerDashboard() {
     <div class="manager-tabs" role="tablist">
       <button class="tab-button${state.managerTab === "requests" ? " active" : ""}" role="tab" data-tab="requests">Requests &amp; loans</button>
       <button class="tab-button${state.managerTab === "books" ? " active" : ""}" role="tab" data-tab="books">Book catalog</button>
+      <button class="tab-button${state.managerTab === "pickup" ? " active" : ""}" role="tab" data-tab="pickup">Verify pickup</button>
     </div>
     ${tabContent}`;
 }
@@ -225,10 +235,20 @@ function authPage() {
 }
 
 function render() {
+  const searchInput = document.activeElement?.id === "search" ? document.activeElement : null;
+  const selectionStart = searchInput?.selectionStart;
+  const selectionEnd = searchInput?.selectionEnd;
   const content = state.page === "login" || state.page === "register" ? authPage() :
     state.page === "loans" ? myLoansPage() :
       state.page === "dashboard" ? managerDashboard() : catalogPage();
   app.innerHTML = shell(content);
+  if (searchInput) {
+    const updatedSearch = app.querySelector("#search");
+    updatedSearch?.focus();
+    if (selectionStart !== null && selectionEnd !== null) {
+      updatedSearch?.setSelectionRange(selectionStart, selectionEnd);
+    }
+  }
 }
 
 async function loadBooks() {
@@ -322,8 +342,13 @@ document.addEventListener("input", (event) => {
   state.search = event.target.value;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(async () => {
-    await loadBooks();
-    if (state.page === "catalog") render();
+    searchTimer = null;
+    try {
+      await loadBooks();
+      if (state.page === "catalog") render();
+    } catch (error) {
+      notify(error.message, "error");
+    }
   }, 180);
 });
 
@@ -335,6 +360,25 @@ document.addEventListener("change", async (event) => {
 });
 
 document.addEventListener("submit", async (event) => {
+  if (event.target.id === "pickup-check-form") {
+    event.preventDefault();
+    const form = event.target;
+    const button = form.querySelector("[type=submit]");
+    button.disabled = true;
+    try {
+      state.pickupCheck = await request("/api/manager/pickup-check", {
+        method: "POST",
+        body: JSON.stringify({ code: new FormData(form).get("code") })
+      });
+      render();
+    } catch (error) {
+      state.pickupCheck = null;
+      notify(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   if (event.target.id !== "auth-form") return;
   event.preventDefault();
   const form = new FormData(event.target);
@@ -372,6 +416,7 @@ document.addEventListener("click", async (event) => {
   const tab = event.target.closest("[data-tab]");
   if (tab) {
     state.managerTab = tab.dataset.tab;
+    state.pickupCheck = null;
     render();
     return;
   }
@@ -399,9 +444,14 @@ document.addEventListener("click", async (event) => {
     } else if (action.dataset.action === "menu") {
       document.querySelector("#sidebar")?.classList.toggle("open");
     } else if (action.dataset.action === "borrow") {
-      await request("/api/loans", { method: "POST", body: JSON.stringify({ bookId: Number(action.dataset.id) }) });
+      const result = await request("/api/loans", { method: "POST", body: JSON.stringify({ bookId: Number(action.dataset.id) }) });
       await refreshCurrentPage();
-      notify("Your borrow request has been sent.");
+      await loadLoans();
+      const loan = state.loans.find((item) => Number(item.id) === Number(result.loanId));
+      const pickupCode = result.pickupCode || loan?.pickupCode;
+      notify(pickupCode
+        ? `Request sent. Your pickup code is ${pickupCode}.`
+        : "Request sent. Check your reading shelf for the pickup code.");
     } else if (action.dataset.action === "return") {
       const result = await request(`/api/loans/${action.dataset.id}/return`, { method: "POST", body: "{}" });
       await refreshCurrentPage();

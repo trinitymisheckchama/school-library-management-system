@@ -132,7 +132,25 @@ if (!testDatabasePrefix) {
     result = await call("/api/loans", { method: "POST", body: { bookId: 1 }, cookie: studentCookie });
     assert.equal(result.response.status, 201);
     const loanId = result.data.loanId;
+    let pickupCode = result.data.pickupCode;
+    assert.match(pickupCode, /^\d{6}$/);
     assert.equal((await call("/api/loans", { method: "POST", body: { bookId: 1 }, cookie: studentCookie })).response.status, 409);
+    result = await call("/api/loans", { cookie: studentCookie });
+    assert.equal(result.data.loans[0].pickupCode, pickupCode);
+    assert.equal(result.data.loans[0].id, loanId);
+    await adminConnection.query(`DELETE FROM \`${databaseName}\`.pickup_codes WHERE loan_id = ?`, [loanId]);
+    result = await call("/api/loans", { cookie: studentCookie });
+    pickupCode = result.data.loans[0].pickupCode;
+    assert.match(pickupCode, /^\d{6}$/);
+    assert.equal((await call("/api/manager/pickup-check", {
+      method: "POST",
+      body: { code: pickupCode },
+      cookie: studentCookie
+    })).response.status, 403);
+    assert.equal((await call("/api/manager/pickup-check", {
+      method: "POST",
+      body: { code: "123" }
+    })).response.status, 401);
 
     result = await call("/api/auth/login", {
       method: "POST",
@@ -141,6 +159,21 @@ if (!testDatabasePrefix) {
     assert.equal(result.response.status, 200);
     const managerCookie = result.cookie;
     assert.ok(managerCookie);
+    result = await call("/api/manager/pickup-check", {
+      method: "POST",
+      body: { code: pickupCode },
+      cookie: managerCookie
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.data.studentEmail, "student@example.test");
+    assert.equal(result.data.title, "The Hobbit");
+    assert.equal(result.data.status, "pending");
+    assert.equal(result.data.canCollect, false);
+    assert.equal((await call("/api/manager/pickup-check", {
+      method: "POST",
+      body: { code: "999999" },
+      cookie: managerCookie
+    })).response.status, 404);
 
     result = await call(`/api/manager/loans/${loanId}`, {
       method: "PATCH",
@@ -148,6 +181,17 @@ if (!testDatabasePrefix) {
       cookie: managerCookie
     });
     assert.equal(result.response.status, 200);
+    result = await call("/api/manager/pickup-check", {
+      method: "POST",
+      body: { code: pickupCode },
+      cookie: managerCookie
+    });
+    assert.equal(result.data.status, "approved");
+    assert.equal(result.data.canCollect, true);
+    assert.equal((await call("/api/manager/books/1", {
+      method: "DELETE",
+      cookie: managerCookie
+    })).response.status, 409);
 
     result = await call("/api/loans", { cookie: studentCookie });
     assert.equal(result.data.loans[0].status, "approved");
@@ -162,6 +206,24 @@ if (!testDatabasePrefix) {
       body: { action: "mark_returned" },
       cookie: managerCookie
     })).response.status, 200);
+    assert.equal((await call("/api/manager/books/1", {
+      method: "DELETE",
+      cookie: managerCookie
+    })).response.status, 200);
+    result = await call("/api/books");
+    assert.equal(result.data.books.some((book) => book.id === 1), false);
+    assert.equal((await call("/api/loans", {
+      method: "POST",
+      body: { bookId: 1 },
+      cookie: studentCookie
+    })).response.status, 404);
+    assert.equal((await call("/api/manager/books/1", {
+      method: "PATCH",
+      body: { title: "Archived Book", author: "Test Author", category: "Test", totalCopies: 1 },
+      cookie: managerCookie
+    })).response.status, 404);
+    result = await call("/api/loans", { cookie: managerCookie });
+    assert.equal(result.data.loans.some((loan) => loan.id === loanId && loan.title === "The Hobbit"), true);
 
     result = await call("/api/manager/books", {
       method: "POST",
@@ -180,10 +242,6 @@ if (!testDatabasePrefix) {
       body: { title: "Unauthorized", author: "Student", category: "Test", totalCopies: 1 },
       cookie: studentCookie
     })).response.status, 403);
-    assert.equal((await call("/api/manager/books/1", {
-      method: "DELETE",
-      cookie: managerCookie
-    })).response.status, 409);
     assert.equal((await call(`/api/manager/books/${bookId}`, {
       method: "DELETE",
       cookie: managerCookie
