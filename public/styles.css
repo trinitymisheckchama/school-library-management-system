@@ -123,6 +123,7 @@ h1 { margin-bottom: 8px; font-family: "Playfair Display", serif; font-size: clam
 .status-approved, .status-returned { background: #eaf1f8; color: #315d8c; }
 .status-pending, .status-return_requested { background: #eef3fa; color: #355b86; }
 .status-rejected { background: #f8ece9; color: #a65c4d; }
+.status-overdue { background: #fff0e8; color: #a34a2b; }
 .pickup-code { display: inline-block; padding: 5px 8px; border: 1px solid #dce4ef; border-radius: 5px; background: #f7f9fc; color: var(--blue-dark); font-family: ui-monospace, "Cascadia Mono", monospace; font-size: 12px; font-weight: 700; }
 .table-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .empty-state { padding: 40px 20px; border: 1px dashed #dce4ee; border-radius: 9px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.6; }
@@ -150,6 +151,9 @@ textarea.field { min-height: 70px; resize: vertical; }
 .toast.error { background: #8c4237; }
 .mobile-menu { display: none; }
 .manager-tabs { display: flex; gap: 6px; margin: 20px 0 16px; border-bottom: 1px solid var(--line); }
+.manager-loan-filters { display: flex; gap: 10px; margin-bottom: 13px; }
+.manager-loan-filters .search-box { max-width: 430px; }
+.manager-loan-filters > .field { width: min(100%, 190px); }
 .tab-button { padding: 10px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 11px; }
 .tab-button.active { border-bottom-color: var(--blue); color: var(--blue); font-weight: 700; }
 .manager-heading { display: flex; align-items: end; justify-content: space-between; gap: 14px; }
@@ -185,6 +189,8 @@ textarea.field { min-height: 70px; resize: vertical; }
   .stat-icon { width: 33px; height: 33px; }
   .manager-heading { align-items: start; flex-direction: column; }
   .pickup-check-form { align-items: stretch; flex-direction: column; }
+  .manager-loan-filters { align-items: stretch; flex-direction: column; }
+  .manager-loan-filters > .field { width: 100%; }
 }
 @media (max-width: 430px) {
   .main-area { padding-inline: 13px; }

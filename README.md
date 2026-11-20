@@ -1,6 +1,6 @@
 # Booknook school library
 
-A full-stack library app for students and library managers. Students can browse the catalog, request available books, receive a pickup code, see approval and due dates, and ask to return a loan. Managers can review requests, verify pickup codes, approve or decline them, record returns, and maintain book listings and stock.
+A full-stack library app for students and library managers. Students can browse the catalog, request available books, receive a pickup code, see approval and due dates, and ask to return a loan. Managers can review requests, verify pickup codes, set a return date when approving a request, decline requests, record returns, and maintain book listings and stock.
 
 ## Requirements
 
@@ -54,5 +54,5 @@ Run `npm test` for the MySQL integration suite. To run it, set `MYSQL_TEST_DATAB
 ## Roles and access
 
 - **Students:** browse books, submit borrow requests with a pickup code, see their own loans, and request returns.
-- **Library managers:** review all requests, verify pickup codes, approve or decline pending requests, check in active loans, and add, edit, or remove books.
+- **Library managers:** review all requests, verify pickup codes, set due dates while approving or decline requests, check in active loans, and add, edit, or remove books.
 - Role checks are enforced by the server, not just by the interface. Passwords are stored as salted scrypt hashes; signed HTTP-only sessions and all library data are persisted in MySQL.

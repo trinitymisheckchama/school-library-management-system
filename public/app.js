@@ -9,6 +9,8 @@ const state = {
   books: [],
   categories: [],
   loans: [],
+  managerLoanSearch: "",
+  managerLoanStatus: "all",
   summary: null,
   managerTab: "requests",
   pickupCheck: null,
@@ -159,6 +161,22 @@ function statusBadge(status) {
   return `<span class="status status-${escapeHtml(status)}">${escapeHtml(status.replaceAll("_", " "))}</span>`;
 }
 
+function loanDisplayStatus(loan) {
+  if (!["approved", "return_requested"].includes(loan.status) || !loan.dueAt) return loan.status;
+  const dueAt = new Date(loan.dueAt.includes("T") ? loan.dueAt : `${loan.dueAt.replace(" ", "T")}Z`);
+  return !Number.isNaN(dueAt.getTime()) && dueAt.getTime() < Date.now() ? "overdue" : loan.status;
+}
+
+function filteredManagerLoans() {
+  const search = state.managerLoanSearch.trim().toLowerCase();
+  return state.loans.filter((loan) => {
+    const matchesSearch = !search || [loan.studentName, loan.studentEmail, loan.title, loan.author, loan.pickupCode]
+      .some((value) => String(value || "").toLowerCase().includes(search));
+    const matchesStatus = state.managerLoanStatus === "all" || loanDisplayStatus(loan) === state.managerLoanStatus;
+    return matchesSearch && matchesStatus;
+  });
+}
+
 function loanRows(loans, manager = false) {
   if (!loans.length) return "";
   return loans.map((loan) => {
@@ -170,7 +188,7 @@ function loanRows(loans, manager = false) {
       ${manager ? `<td><div class="table-book">${escapeHtml(loan.studentName)}</div><div class="table-sub">${escapeHtml(loan.studentEmail)}</div></td>` : ""}
       <td><div class="table-book">${escapeHtml(loan.title)}</div><div class="table-sub">${escapeHtml(loan.author)}</div></td>
       ${manager ? "" : `<td><span class="pickup-code">${escapeHtml(loan.pickupCode || "—")}</span></td>`}
-      <td>${statusBadge(loan.status)}</td><td>${formatDate(loan.requestedAt)}</td>
+      <td>${statusBadge(loanDisplayStatus(loan))}</td><td>${formatDate(loan.requestedAt)}</td>
       <td>${formatDate(loan.dueAt)}</td><td>${actions}</td>
     </tr>`;
   }).join("");
@@ -201,7 +219,13 @@ function managerDashboard() {
       </form>
       ${state.pickupCheck ? `<section class="pickup-result" aria-live="polite"><div class="eyebrow">Pickup code ${escapeHtml(state.pickupCheck.code)}</div><h2>${escapeHtml(state.pickupCheck.title)}</h2><p>Student: <strong>${escapeHtml(state.pickupCheck.studentName)}</strong> (${escapeHtml(state.pickupCheck.studentEmail)})</p><p>Status: ${statusBadge(state.pickupCheck.status)}</p><p class="pickup-verdict ${state.pickupCheck.canCollect ? "ready" : "waiting"}">${state.pickupCheck.canCollect ? "Approved. You may hand over this book." : "This request is not approved for collection yet."}</p></section>` : ""}` :
       `<div class="section-heading"><div><h2>Borrow requests &amp; loans</h2><p>Review student requests and check books back in.</p></div></div>
-      <div class="table-wrap">${state.loans.length ? `<table class="data-table"><thead><tr><th>Student</th><th>Book</th><th>Status</th><th>Requested</th><th>Due date</th><th>Action</th></tr></thead><tbody>${loanRows(state.loans, true)}</tbody></table>` : `<div class="empty-state">No borrow requests yet. They will appear here when a student asks for a book.</div>`}</div>`;
+      <div class="manager-loan-filters">
+        <label class="search-box"><span aria-hidden="true">⌕</span><input class="field" id="manager-loan-search" type="search" value="${escapeHtml(state.managerLoanSearch)}" placeholder="Search student, book, or pickup code" aria-label="Search loan history"></label>
+        <select class="field" id="manager-loan-status" aria-label="Filter loans by status">
+          ${[["all", "All statuses"], ["pending", "Pending"], ["approved", "Approved"], ["overdue", "Overdue"], ["return_requested", "Return requested"], ["returned", "Returned"], ["rejected", "Rejected"]].map(([value, label]) => `<option value="${value}" ${state.managerLoanStatus === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="table-wrap">${filteredManagerLoans().length ? `<table class="data-table"><thead><tr><th>Student</th><th>Book</th><th>Status</th><th>Requested</th><th>Due date</th><th>Action</th></tr></thead><tbody>${loanRows(filteredManagerLoans(), true)}</tbody></table>` : `<div class="empty-state">No loans match these filters.</div>`}</div>`;
   return `<div class="eyebrow">Staff workspace</div><h1>Library overview</h1><p class="page-subtitle">A quick look at your collection and what needs your attention.</p>
     <div class="stats-grid">
       <div class="stat-card"><span class="stat-icon">${icons.catalog}</span><span><span class="stat-label">Book titles</span><div class="stat-value">${summary.books}</div></span></div>
@@ -235,7 +259,7 @@ function authPage() {
 }
 
 function render() {
-  const searchInput = document.activeElement?.id === "search" ? document.activeElement : null;
+  const searchInput = ["search", "manager-loan-search"].includes(document.activeElement?.id) ? document.activeElement : null;
   const selectionStart = searchInput?.selectionStart;
   const selectionEnd = searchInput?.selectionEnd;
   const content = state.page === "login" || state.page === "register" ? authPage() :
@@ -324,6 +348,43 @@ function bookForm(book) {
   });
 }
 
+function approvalForm(loanId) {
+  const modal = document.createElement("div");
+  modal.className = "modal-backdrop";
+  const today = new Date().toISOString().slice(0, 10);
+  modal.innerHTML = `<section class="modal" role="dialog" aria-modal="true" aria-labelledby="approval-modal-title">
+    <div class="modal-top"><div><h2 id="approval-modal-title">Set return date</h2><p>Choose when this book should be returned.</p></div><button class="icon-button" data-close aria-label="Close dialog">×</button></div>
+    <form id="approve-loan-form" class="form-stack">
+      <div class="form-field"><label for="loan-due-date">Due date</label><input class="field" id="loan-due-date" name="dueDate" type="date" min="${today}" required></div>
+      <div class="form-actions"><button type="button" class="button button-secondary" data-close>Cancel</button><button class="button" type="submit">Approve request</button></div>
+    </form>
+  </section>`;
+  document.body.append(modal);
+  modal.querySelector("#loan-due-date").focus();
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal || event.target.closest("[data-close]")) modal.remove();
+  });
+  modal.querySelector("#approve-loan-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("[type=submit]");
+    button.disabled = true;
+    try {
+      const dueDate = new FormData(form).get("dueDate");
+      const result = await request(`/api/manager/loans/${loanId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ action: "approve", dueDate })
+      });
+      modal.remove();
+      await refreshCurrentPage();
+      notify(result.message);
+    } catch (error) {
+      notify(error.message, "error");
+      button.disabled = false;
+    }
+  });
+}
+
 async function refreshCurrentPage() {
   await loadBooks();
   if (state.page === "dashboard") {
@@ -338,6 +399,11 @@ async function refreshCurrentPage() {
 
 let searchTimer;
 document.addEventListener("input", (event) => {
+  if (event.target.id === "manager-loan-search") {
+    state.managerLoanSearch = event.target.value;
+    render();
+    return;
+  }
   if (event.target.id !== "search") return;
   state.search = event.target.value;
   clearTimeout(searchTimer);
@@ -353,6 +419,11 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", async (event) => {
+  if (event.target.id === "manager-loan-status") {
+    state.managerLoanStatus = event.target.value;
+    render();
+    return;
+  }
   if (event.target.id !== "category") return;
   state.category = event.target.value;
   await loadBooks();
@@ -457,6 +528,10 @@ document.addEventListener("click", async (event) => {
       await refreshCurrentPage();
       notify(result.message);
     } else if (action.dataset.action === "loan") {
+      if (action.dataset.value === "approve") {
+        approvalForm(Number(action.dataset.id));
+        return;
+      }
       const result = await request(`/api/manager/loans/${action.dataset.id}`, {
         method: "PATCH", body: JSON.stringify({ action: action.dataset.value })
       });

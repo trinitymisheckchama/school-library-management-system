@@ -159,6 +159,17 @@ if (!testDatabasePrefix) {
     assert.equal(result.response.status, 200);
     const managerCookie = result.cookie;
     assert.ok(managerCookie);
+    const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    assert.equal((await call(`/api/manager/loans/${loanId}`, {
+      method: "PATCH",
+      body: { action: "approve" },
+      cookie: managerCookie
+    })).response.status, 400);
+    assert.equal((await call(`/api/manager/loans/${loanId}`, {
+      method: "PATCH",
+      body: { action: "approve", dueDate: "2026-02-31" },
+      cookie: managerCookie
+    })).response.status, 400);
     result = await call("/api/manager/pickup-check", {
       method: "POST",
       body: { code: pickupCode },
@@ -177,7 +188,7 @@ if (!testDatabasePrefix) {
 
     result = await call(`/api/manager/loans/${loanId}`, {
       method: "PATCH",
-      body: { action: "approve" },
+      body: { action: "approve", dueDate },
       cookie: managerCookie
     });
     assert.equal(result.response.status, 200);
@@ -195,7 +206,7 @@ if (!testDatabasePrefix) {
 
     result = await call("/api/loans", { cookie: studentCookie });
     assert.equal(result.data.loans[0].status, "approved");
-    assert.ok(result.data.loans[0].dueAt);
+    assert.ok(result.data.loans[0].dueAt.startsWith(dueDate));
     assert.equal((await call(`/api/loans/${loanId}/return`, {
       method: "POST",
       body: {},
@@ -206,6 +217,10 @@ if (!testDatabasePrefix) {
       body: { action: "mark_returned" },
       cookie: managerCookie
     })).response.status, 200);
+    result = await call("/api/loans", { cookie: studentCookie });
+    assert.equal(result.data.loans.some((loan) => loan.id === loanId), false);
+    result = await call("/api/loans", { cookie: managerCookie });
+    assert.equal(result.data.loans.find((loan) => loan.id === loanId).status, "returned");
     assert.equal((await call("/api/manager/books/1", {
       method: "DELETE",
       cookie: managerCookie

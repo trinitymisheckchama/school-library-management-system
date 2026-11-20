@@ -279,7 +279,9 @@ app.get("/api/books", async (req, res) => {
 });
 
 app.get("/api/loans", requireAuth, async (req, res) => {
-  const filter = req.user.role === "manager" ? "" : "WHERE loans.student_id = ?";
+  const filter = req.user.role === "manager"
+    ? ""
+    : "WHERE loans.student_id = ? AND loans.status <> 'returned'";
   const values = req.user.role === "manager" ? [] : [req.user.id];
   const loansWithoutCodes = await queryAll(`
     SELECT loans.id FROM loans
@@ -473,6 +475,16 @@ app.patch("/api/manager/loans/:id", requireAuth, requireRole("manager"), async (
   if (!Number.isSafeInteger(loanId) || loanId < 1 || !["approve", "reject", "mark_returned"].includes(action)) {
     return res.status(400).json({ error: "Choose a valid request action." });
   }
+  const dueDate = req.body?.dueDate;
+  if (action === "approve") {
+    const parsedDate = typeof dueDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)
+      ? new Date(`${dueDate}T00:00:00Z`)
+      : null;
+    if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== dueDate ||
+        dueDate < new Date().toISOString().slice(0, 10)) {
+      return res.status(400).json({ error: "Choose a valid due date that is today or later." });
+    }
+  }
   const result = await withTransaction(async (connection) => {
     const initialLoan = await queryOne("SELECT id, book_id FROM loans WHERE id = ?", [loanId], connection);
     if (!initialLoan) return { error: "That request could not be found.", status: 404 };
@@ -484,9 +496,9 @@ app.patch("/api/manager/loans/:id", requireAuth, requireRole("manager"), async (
     if (action === "approve") {
       if (loan.status !== "pending") return { error: "Only pending requests can be approved.", status: 409 };
       if (await availableCopies(loan.book_id, connection) < 1) return { error: "No copies are currently available.", status: 409 };
-      const dueAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
+      const dueAt = `${dueDate} 23:59:59`;
       await execute("UPDATE loans SET status = 'approved', due_at = ? WHERE id = ?", [dueAt, loanId], connection);
-      return { ok: true, message: "Request approved. The book is due in 14 days." };
+      return { ok: true, message: `Request approved. The book is due by ${dueDate}.` };
     }
     if (action === "reject") {
       if (loan.status !== "pending") return { error: "Only pending requests can be rejected.", status: 409 };
